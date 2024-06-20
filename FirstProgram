@@ -1,0 +1,99 @@
+# Ensure necessary modules are installed
+if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
+    Install-Module -Name ImportExcel -Force -Scope CurrentUser
+}
+
+if (-not (Get-Module -ListAvailable -Name SqlServer)) {
+    Install-Module -Name SqlServer -Force -Scope CurrentUser
+}
+
+# Parameters
+param(
+    [string]$ExcelFilePath,
+    [string]$ExcelColumn,
+    [string]$SqlTableName,
+    [string]$DbServer,
+    [string]$DbName
+)
+
+# Function to read account numbers from Excel file
+function Get-AccountNumbersFromExcel {
+    param(
+        [string]$filePath,
+        [string]$column
+    )
+
+    $accountNumbers = Import-Excel -Path $filePath | Select-Object -ExpandProperty $column
+    return $accountNumbers
+}
+
+# Function to get documents from SQL table
+function Get-DocumentsFromSql {
+    param(
+        [string]$accountNumber,
+        [string]$tableName,
+        [string]$dbServer,
+        [string]$dbName
+    )
+
+    $query = "SELECT DocumentPath FROM $tableName WHERE AccountNumber = '$accountNumber'"
+    $documents = Invoke-Sqlcmd -ServerInstance $dbServer -Database $dbName -Query $query
+    return $documents
+}
+
+# Function to delete files
+function Delete-Files {
+    param(
+        [array]$filePaths
+    )
+
+    $deletedFiles = @()
+    foreach ($file in $filePaths) {
+        if (Test-Path $file) {
+            Remove-Item $file -Force
+            $deletedFiles += $file
+        }
+    }
+    return $deletedFiles
+}
+
+# Function to delete records from SQL table
+function Delete-RecordsFromSql {
+    param(
+        [string]$accountNumber,
+        [string]$tableName,
+        [string]$dbServer,
+        [string]$dbName
+    )
+
+    $query = "DELETE FROM $tableName WHERE AccountNumber = '$accountNumber'"
+    Invoke-Sqlcmd -ServerInstance $dbServer -Database $dbName -Query $query
+}
+
+# Main script execution
+$accountNumbers = Get-AccountNumbersFromExcel -filePath $ExcelFilePath -column $ExcelColumn
+$deletedRecords = @()
+$deletedFilesReport = @()
+
+foreach ($accountNumber in $accountNumbers) {
+    # Get documents for the account number
+    $documents = Get-DocumentsFromSql -accountNumber $accountNumber -tableName $SqlTableName -dbServer $DbServer -dbName $DbName
+
+    # Collect file paths to delete
+    $filePaths = $documents | Select-Object -ExpandProperty DocumentPath
+
+    # Delete files and collect the deleted files
+    $deletedFiles = Delete-Files -filePaths $filePaths
+    $deletedFilesReport += $deletedFiles
+
+    # Delete records from SQL table
+    Delete-RecordsFromSql -accountNumber $accountNumber -tableName $SqlTableName -dbServer $DbServer -dbName $DbName
+    $deletedRecords += $accountNumber
+}
+
+# Print report
+Write-Output "Deleted Records:"
+$deletedRecords | ForEach-Object { Write-Output $_ }
+
+Write-Output "Deleted Files:"
+$deletedFilesReport | ForEach-Object { Write-Output $_ }
